@@ -12,6 +12,10 @@ const cli = cac("sitefetch")
 cli
   .command("[url]", "Fetch a site")
   .option("-o, --outfile <path>", "Write the fetched site to a text file")
+  .option(
+    "-d, --outdir <path>",
+    "Save files preserving directory structure (HTML and PDF)"
+  )
   .option("--concurrency <number>", "Number of concurrent requests", {
     default: 3,
   })
@@ -29,14 +33,14 @@ cli
       logger.setLevel("silent")
     }
 
-    const pages = await fetchSite(url, {
+    const { pages, assets } = await fetchSite(url, {
       concurrency: flags.concurrency,
       match: flags.match && ensureArray(flags.match),
       contentSelector: flags.contentSelector,
       limit: flags.limit,
     })
 
-    if (pages.size === 0) {
+    if (pages.size === 0 && assets.size === 0) {
       logger.warn("No pages found")
       return
     }
@@ -54,7 +58,48 @@ cli
       )}`
     )
 
-    if (flags.outfile) {
+    if (assets.size > 0) {
+      logger.info(`Found ${assets.size} PDF file(s)`)
+    }
+
+    if (flags.outdir) {
+      const siteUrl = new URL(url)
+      const host = siteUrl.host
+      let savedCount = 0
+
+      // Save HTML pages
+      for (const [pathname, page] of pages) {
+        let filePath = pathname
+        if (filePath.endsWith("/") || !path.extname(filePath)) {
+          filePath = path.join(filePath, "index.html")
+        }
+        if (!filePath.endsWith(".html") && !filePath.endsWith(".htm")) {
+          filePath += ".html"
+        }
+
+        const fullPath = path.join(flags.outdir, host, filePath)
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+        fs.writeFileSync(fullPath, page.html, "utf8")
+        savedCount++
+      }
+
+      // Save PDF assets
+      for (const [pathname, asset] of assets) {
+        let filePath = pathname
+        if (!filePath.endsWith(".pdf")) {
+          filePath += ".pdf"
+        }
+
+        const fullPath = path.join(flags.outdir, host, filePath)
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+        fs.writeFileSync(fullPath, asset.data)
+        savedCount++
+      }
+
+      logger.info(
+        `Saved ${savedCount} file(s) to ${path.resolve(flags.outdir)}`
+      )
+    } else if (flags.outfile) {
       const output = serializePages(
         pages,
         flags.outfile.endsWith(".json") ? "json" : "text"

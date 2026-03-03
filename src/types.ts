@@ -30,6 +30,18 @@ export type Page = {
   title: string
   url: string
   content: string
+  html: string
+}
+
+export type Asset = {
+  url: string
+  data: Buffer
+  contentType: string
 }
 
 export type FetchSiteResult = Map<string, Page>
+
+export type FetchResult = {
+  pages: FetchSiteResult
+  assets: Map<string, Asset>
+}

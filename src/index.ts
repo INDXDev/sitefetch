@@ -6,12 +6,12 @@ import { toMarkdown } from "./to-markdown.ts"
 import { logger } from "./logger.ts"
 import { load } from "cheerio"
 import { matchPath } from "./utils.ts"
-import type { Options, FetchSiteResult } from "./types.ts"
+import type { Options, FetchSiteResult, FetchResult, Asset } from "./types.ts"
 
 export async function fetchSite(
   url: string,
   options: Options
-): Promise<FetchSiteResult> {
+): Promise<FetchResult> {
   const fetcher = new Fetcher(options)
 
   return fetcher.fetchSite(url)
@@ -19,6 +19,7 @@ export async function fetchSite(
 
 class Fetcher {
   #pages: FetchSiteResult = new Map()
+  #assets: Map<string, Asset> = new Map()
   #fetched: Set<string> = new Set()
   #queue: Queue
 
@@ -38,7 +39,7 @@ class Fetcher {
     return this.options.contentSelector
   }
 
-  async fetchSite(url: string) {
+  async fetchSite(url: string): Promise<FetchResult> {
     logger.info(
       `Started fetching ${c.green(url)} with a concurrency of ${
         this.#queue.concurrency
@@ -51,7 +52,7 @@ class Fetcher {
 
     await this.#queue.onIdle()
 
-    return this.#pages
+    return { pages: this.#pages, assets: this.#assets }
   }
 
   async #fetchPage(
@@ -97,6 +98,18 @@ class Fetcher {
 
     const contentType = res.headers.get("content-type")
 
+    // Handle PDF files
+    if (contentType?.includes("application/pdf")) {
+      logger.info(`Downloading PDF ${c.green(url)}`)
+      const buffer = Buffer.from(await res.arrayBuffer())
+      this.#assets.set(pathname, {
+        url,
+        data: buffer,
+        contentType: "application/pdf",
+      })
+      return
+    }
+
     if (!contentType?.includes("text/html")) {
       logger.warn(`Not a HTML page: ${url}`)
       return
@@ -111,7 +124,8 @@ class Fetcher {
     }
     const extraUrls: string[] = []
 
-    const $ = load(await res.text())
+    const rawHtml = await res.text()
+    const $ = load(rawHtml)
     $("script,style,link,img,video").remove()
 
     $("a").each((_, el) => {
@@ -179,6 +193,7 @@ class Fetcher {
       title: article.title || pageTitle,
       url,
       content,
+      html: rawHtml,
     })
   }
 }
@@ -188,7 +203,9 @@ export function serializePages(
   format: "json" | "text"
 ): string {
   if (format === "json") {
-    return JSON.stringify([...pages.values()])
+    return JSON.stringify(
+      [...pages.values()].map(({ html: _, ...rest }) => rest)
+    )
   }
 
   return [...pages.values()]
