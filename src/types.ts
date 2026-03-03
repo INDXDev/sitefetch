@@ -24,6 +24,16 @@ export type Options = {
    * A custom function to fetch URL
    */
   fetch?: (url: string, init: RequestInit) => Promise<Response>
+
+  /**
+   * Called immediately when a page is fetched
+   */
+  onPage?: (pathname: string, page: Page) => void
+
+  /**
+   * Called immediately when an asset (PDF) is fetched
+   */
+  onAsset?: (pathname: string, asset: Asset) => void
 }
 
 export type Page = {

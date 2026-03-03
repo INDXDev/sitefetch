@@ -1,5 +1,7 @@
 import path from "node:path"
 import fs from "node:fs"
+import { execSync } from "node:child_process"
+import os from "node:os"
 import { cac } from "cac"
 import { encode } from "gpt-tokenizer/model/gpt-4o"
 import { fetchSite, serializePages } from "./index.ts"
@@ -33,11 +35,72 @@ cli
       logger.setLevel("silent")
     }
 
+    let savedCount = 0
+    const outdir = flags.outdir
+    const host = outdir ? new URL(url).host : ""
+    const tmpDir = outdir
+      ? fs.mkdtempSync(path.join(os.tmpdir(), "sitefetch-"))
+      : ""
+
+    function savePage(pathname: string, page: { html: string }) {
+      let filePath = pathname
+      if (filePath.endsWith("/") || !path.extname(filePath)) {
+        filePath = path.join(filePath, "index.html")
+      }
+      if (!filePath.endsWith(".html") && !filePath.endsWith(".htm")) {
+        filePath += ".html"
+      }
+      const tmpPath = path.join(tmpDir, host, filePath)
+      fs.mkdirSync(path.dirname(tmpPath), { recursive: true })
+      fs.writeFileSync(tmpPath, page.html, "utf8")
+
+      // Convert HTML to md with markitdown
+      const mdName = path.basename(filePath).replace(/\.html?$/, ".md")
+      const destDir = path.join(outdir, host, path.dirname(filePath))
+      const mdPath = path.join(destDir, mdName)
+      fs.mkdirSync(destDir, { recursive: true })
+      try {
+        execSync(`markitdown "${tmpPath}" -o "${mdPath}"`, { stdio: "pipe" })
+        savedCount++
+        logger.info(`Saved ${mdPath}`)
+      } catch {
+        logger.warn(`markitdown failed for ${pathname}, saving raw html`)
+        fs.writeFileSync(path.join(destDir, path.basename(filePath)), page.html, "utf8")
+        savedCount++
+      }
+    }
+
+    function saveAsset(pathname: string, asset: { data: Buffer }) {
+      let filePath = pathname
+      if (!filePath.endsWith(".pdf")) {
+        filePath += ".pdf"
+      }
+      const tmpPath = path.join(tmpDir, host, filePath)
+      fs.mkdirSync(path.dirname(tmpPath), { recursive: true })
+      fs.writeFileSync(tmpPath, asset.data)
+
+      // Convert PDF to md with opendataloader-pdf
+      const mdName = path.basename(filePath).replace(/\.pdf$/, ".md")
+      const destDir = path.join(outdir, host, path.dirname(filePath))
+      fs.mkdirSync(destDir, { recursive: true })
+      try {
+        execSync(`opendataloader-pdf -f markdown -o "${destDir}" "${tmpPath}"`, { stdio: "pipe" })
+        savedCount++
+        logger.info(`Saved ${path.join(destDir, mdName)}`)
+      } catch {
+        logger.warn(`opendataloader-pdf failed for ${pathname}, saving raw pdf`)
+        fs.writeFileSync(path.join(destDir, path.basename(filePath)), asset.data)
+        savedCount++
+      }
+    }
+
     const { pages, assets } = await fetchSite(url, {
       concurrency: flags.concurrency,
       match: flags.match && ensureArray(flags.match),
       contentSelector: flags.contentSelector,
       limit: flags.limit,
+      onPage: outdir ? savePage : undefined,
+      onAsset: outdir ? saveAsset : undefined,
     })
 
     if (pages.size === 0 && assets.size === 0) {
@@ -62,42 +125,11 @@ cli
       logger.info(`Found ${assets.size} PDF file(s)`)
     }
 
-    if (flags.outdir) {
-      const siteUrl = new URL(url)
-      const host = siteUrl.host
-      let savedCount = 0
-
-      // Save HTML pages
-      for (const [pathname, page] of pages) {
-        let filePath = pathname
-        if (filePath.endsWith("/") || !path.extname(filePath)) {
-          filePath = path.join(filePath, "index.html")
-        }
-        if (!filePath.endsWith(".html") && !filePath.endsWith(".htm")) {
-          filePath += ".html"
-        }
-
-        const fullPath = path.join(flags.outdir, host, filePath)
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true })
-        fs.writeFileSync(fullPath, page.html, "utf8")
-        savedCount++
-      }
-
-      // Save PDF assets
-      for (const [pathname, asset] of assets) {
-        let filePath = pathname
-        if (!filePath.endsWith(".pdf")) {
-          filePath += ".pdf"
-        }
-
-        const fullPath = path.join(flags.outdir, host, filePath)
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true })
-        fs.writeFileSync(fullPath, asset.data)
-        savedCount++
-      }
-
+    if (outdir) {
+      // Clean up temp dir
+      fs.rmSync(tmpDir, { recursive: true, force: true })
       logger.info(
-        `Saved ${savedCount} file(s) to ${path.resolve(flags.outdir)}`
+        `Saved ${savedCount} file(s) to ${path.resolve(outdir)}`
       )
     } else if (flags.outfile) {
       const output = serializePages(

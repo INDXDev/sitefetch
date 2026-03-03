@@ -102,11 +102,9 @@ class Fetcher {
     if (contentType?.includes("application/pdf")) {
       logger.info(`Downloading PDF ${c.green(url)}`)
       const buffer = Buffer.from(await res.arrayBuffer())
-      this.#assets.set(pathname, {
-        url,
-        data: buffer,
-        contentType: "application/pdf",
-      })
+      const asset = { url, data: buffer, contentType: "application/pdf" }
+      this.#assets.set(pathname, asset)
+      this.options.onAsset?.(pathname, asset)
       return
     }
 
@@ -189,12 +187,14 @@ class Fetcher {
 
     const content = toMarkdown(article.content)
 
-    this.#pages.set(pathname, {
+    const page = {
       title: article.title || pageTitle,
       url,
       content,
       html: rawHtml,
-    })
+    }
+    this.#pages.set(pathname, page)
+    this.options.onPage?.(pathname, page)
   }
 }
 
